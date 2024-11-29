@@ -1,6 +1,5 @@
 package com.akhmedmv.terminal.presentation
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.akhmedmv.terminal.data.ApiFactory
@@ -19,7 +18,7 @@ class TerminalViewModel : ViewModel() {
     private var lastState: TerminalScreenState = TerminalScreenState.Initial
 
     private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
-        Log.d("TerminalViewModel", "Exception caught: $throwable")
+        _state.value = lastState
     }
 
     init {
@@ -27,6 +26,7 @@ class TerminalViewModel : ViewModel() {
     }
 
     fun loadBarList(timeFrame: TimeFrame = TimeFrame.HOUR_1) {
+        lastState = _state.value
         _state.value = TerminalScreenState.Loading
         viewModelScope.launch(exceptionHandler) {
             val barList = apiService.loadBars(timeFrame.value).barList
