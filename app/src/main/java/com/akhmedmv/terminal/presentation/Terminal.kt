@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -35,35 +36,38 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.akhmedmv.terminal.R
+import com.akhmedmv.terminal.data.Bar
 import com.akhmedmv.terminal.data.rememberTerminalState
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
 import kotlin.math.roundToInt
 
 private const val MIN_VISIBLE_BARS_COUNT = 20
 
 @Composable
 fun Terminal(
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
-
     val viewModel: TerminalViewModel = viewModel()
     val screenState = viewModel.state.collectAsState()
+
     when (val currentState = screenState.value) {
         is TerminalScreenState.Content -> {
             val terminalState = rememberTerminalState(bars = currentState.barList)
 
             Chart(
+                modifier = modifier,
                 terminalState = terminalState,
                 onTerminalStateChanged = {
                     terminalState.value = it
-                },
-                modifier = modifier
+                }, timeFrame = currentState.timeFrame
             )
 
             currentState.barList.firstOrNull()?.let {
                 Prices(
                     modifier = modifier,
-                    terminalState = terminalState,
-                    lastPrice = it.close,
+                    terminalState = terminalState, lastPrice = it.close
                 )
             }
 
@@ -77,7 +81,7 @@ fun Terminal(
 
         }
 
-        is TerminalScreenState.Loading -> {
+        TerminalScreenState.Loading -> {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -103,16 +107,14 @@ private fun TimeFrames(
     ) {
         TimeFrame.entries.forEach { timeFrame ->
             val labelResId = when (timeFrame) {
-                TimeFrame.MIN_5 -> R.string.timeframe_5_minute
-                TimeFrame.MIN_15 -> R.string.timeframe_15_minute
-                TimeFrame.MIN_30 -> R.string.timeframe_30_minute
+                TimeFrame.MIN_5 -> R.string.timeframe_5_minutes
+                TimeFrame.MIN_15 -> R.string.timeframe_15_minutes
+                TimeFrame.MIN_30 -> R.string.timeframe_30_minutes
                 TimeFrame.HOUR_1 -> R.string.timeframe_1_hour
             }
             val isSelected = timeFrame == selectedFrame
             AssistChip(
-                onClick = {
-                    onTimeFrameSelected(timeFrame)
-                },
+                onClick = { onTimeFrameSelected(timeFrame) },
                 label = { Text(text = stringResource(id = labelResId)) },
                 colors = AssistChipDefaults.assistChipColors(
                     containerColor = if (isSelected) Color.White else Color.Black,
@@ -127,7 +129,8 @@ private fun TimeFrames(
 private fun Chart(
     modifier: Modifier = Modifier,
     terminalState: State<TerminalState>,
-    onTerminalStateChanged: (TerminalState) -> Unit
+    onTerminalStateChanged: (TerminalState) -> Unit,
+    timeFrame: TimeFrame
 ) {
     val currentState = terminalState.value
     val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
@@ -146,23 +149,21 @@ private fun Chart(
         )
     }
 
+    val textMeasurer = rememberTextMeasurer()
+
     Canvas(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
             .clipToBounds()
             .padding(
-                top = 32.dp,
-                bottom = 32.dp,
-                end = 32.dp
+                top = 32.dp, bottom = 32.dp, end = 32.dp
             )
-
             .transformable(transformableState)
             .onSizeChanged {
                 onTerminalStateChanged(
                     currentState.copy(
-                        terminalWidth = it.width.toFloat(),
-                        terminalHeight = it.height.toFloat()
+                        terminalWidth = it.width.toFloat(), terminalHeight = it.height.toFloat()
                     )
                 )
             }
@@ -172,6 +173,13 @@ private fun Chart(
         translate(left = currentState.scrolledBy) {
             currentState.barList.forEachIndexed { index, bar ->
                 val offsetX = size.width - index * currentState.barWidth
+                drawTimeDelimiter(
+                    bar = bar, nextBar = if (index < currentState.barList.size - 1) {
+                        currentState.barList[index + 1]
+                    } else {
+                        null
+                    }, timeFrame = timeFrame, offsetX = offsetX, textMeasurer = textMeasurer
+                )
                 drawLine(
                     color = Color.White,
                     start = Offset(offsetX, size.height - ((bar.low - min) * pxPerPoint)),
@@ -192,8 +200,7 @@ private fun Chart(
 @Composable
 private fun Prices(
     modifier: Modifier = Modifier,
-    terminalState: State<TerminalState>,
-    lastPrice: Float,
+    terminalState: State<TerminalState>, lastPrice: Float
 ) {
     val currentState = terminalState.value
     val textMeasurer = rememberTextMeasurer()
@@ -209,6 +216,63 @@ private fun Prices(
     ) {
         drawPrices(max, min, pxPerPoint, lastPrice, textMeasurer)
     }
+}
+
+private fun DrawScope.drawTimeDelimiter(
+    bar: Bar, nextBar: Bar?, timeFrame: TimeFrame, offsetX: Float, textMeasurer: TextMeasurer
+) {
+    val calendar = bar.calendar
+
+    val minutes = calendar.get(Calendar.MINUTE)
+    val hours = calendar.get(Calendar.HOUR_OF_DAY)
+    val day = calendar.get(Calendar.DAY_OF_MONTH)
+
+    val shouldDrawDelimiter = when (timeFrame) {
+        TimeFrame.MIN_5 -> {
+            minutes == 0
+        }
+
+        TimeFrame.MIN_15 -> {
+            minutes == 0 && hours % 2 == 0
+        }
+
+        TimeFrame.MIN_30, TimeFrame.HOUR_1 -> {
+            val nextBarDay = nextBar?.calendar?.get(Calendar.DAY_OF_MONTH)
+            day != nextBarDay
+        }
+    }
+    if (!shouldDrawDelimiter) return
+
+    drawLine(
+        color = Color.White.copy(alpha = 0.5f),
+        start = Offset(offsetX, 0f),
+        end = Offset(offsetX, size.height),
+        strokeWidth = 1f,
+        pathEffect = PathEffect.dashPathEffect(
+            intervals = floatArrayOf(4.dp.toPx(), 4.dp.toPx())
+        )
+    )
+    val formatter = SimpleDateFormat("MMM", Locale.getDefault())
+    val nameOfMonth = formatter.format(calendar.time)
+//    val nameOfMonth = calendar.getDisplayName(Calendar.MONTH, Calendar.SHORT, Locale.getDefault())
+    val text = when (timeFrame) {
+        TimeFrame.MIN_5, TimeFrame.MIN_15 -> {
+            String.format(Locale.getDefault(), "%02d:00", hours)
+        }
+
+        TimeFrame.MIN_30, TimeFrame.HOUR_1 -> {
+            String.format("%s %s", day, nameOfMonth)
+        }
+    }
+    val textLayoutResult = textMeasurer.measure(
+        text = text, style = TextStyle(
+            color = Color.White, fontSize = 12.sp
+        )
+    )
+    drawText(
+        textLayoutResult = textLayoutResult,
+        topLeft = Offset(offsetX - textLayoutResult.size.width / 2, size.height)
+    )
 }
 
 private fun DrawScope.drawPrices(
@@ -255,6 +319,7 @@ private fun DrawScope.drawPrices(
     )
 }
 
+@OptIn(ExperimentalTextApi::class)
 private fun DrawScope.drawTextPrice(
     textMeasurer: TextMeasurer,
     price: Float,
@@ -286,8 +351,7 @@ private fun DrawScope.drawDashedLine(
         strokeWidth = strokeWidth,
         pathEffect = PathEffect.dashPathEffect(
             intervals = floatArrayOf(
-                4.dp.toPx(),
-                4.dp.toPx()
+                4.dp.toPx(), 4.dp.toPx()
             )
         )
     )
